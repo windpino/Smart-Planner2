@@ -1,9 +1,14 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Order, OrderItem, ProductDefinition, ClientDefinition, FinancialRecord, ScheduleEvent } from './types';
-import { ChevronLeft, ChevronRight, Plus, Truck, CheckCircle, Trash, GripVertical, Settings, Pencil, Download, Upload, ChevronDown, ChevronUp, Phone, Search, Check, X, Calendar, Volume2, VolumeX } from './components/Icons';
+import { ChevronLeft, ChevronRight, Plus, Truck, CheckCircle, Trash, GripVertical, Settings, Pencil, Download, Upload, ChevronDown, ChevronUp, Phone, Search, Check, X, Calendar, Volume2, VolumeX, Cloud } from './components/Icons';
 import { getSmartLoadingAdvice } from './services/geminiService';
 import { soundService } from './services/soundService';
+import { 
+  savePlannerDataToFirestore, 
+  subscribeToPlannerData,
+  fetchPlannerDataFromFirestore 
+} from './services/firebase';
 
 const HOLIDAYS: Record<string, string> = {
   '01-01': '신정',
@@ -251,12 +256,94 @@ const App: React.FC = () => {
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const [showOnlyUnloaded, setShowOnlyUnloaded] = useState(false);
   const [hideDelivered, setHideDelivered] = useState(false);
+  const [firebaseStatus, setFirebaseStatus] = useState<'synced' | 'saving' | 'offline'>('synced');
 
-  useEffect(() => { localStorage.setItem('smart_orders_v11', JSON.stringify(orders)); }, [orders]);
-  useEffect(() => { localStorage.setItem('smart_products_v11', JSON.stringify(products)); }, [products]);
-  useEffect(() => { localStorage.setItem('smart_clients_v11', JSON.stringify(clients)); }, [clients]);
-  useEffect(() => { localStorage.setItem('smart_financials_v11', JSON.stringify(financials)); }, [financials]);
-  useEffect(() => { localStorage.setItem('smart_schedules_v11', JSON.stringify(schedules)); }, [schedules]);
+  // Firebase Real-time Synchronization
+  const isInitialCloudSyncDone = useRef(false);
+  const saveCloudTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 1. Initial Cloud Sync & Real-time Listener
+  useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    async function initFirebaseSync() {
+      try {
+        const cloudData = await fetchPlannerDataFromFirestore();
+        if (cloudData) {
+          if (Array.isArray(cloudData.orders)) setOrders(cloudData.orders);
+          if (Array.isArray(cloudData.products)) setProducts(cloudData.products);
+          if (Array.isArray(cloudData.clients)) setClients(cloudData.clients);
+          if (Array.isArray(cloudData.financials)) setFinancials(cloudData.financials);
+          if (Array.isArray(cloudData.schedules)) setSchedules(cloudData.schedules);
+        } else {
+          // Cloud document does not exist yet: seed with initial local data
+          await savePlannerDataToFirestore({
+            orders,
+            products,
+            clients,
+            financials,
+            schedules
+          });
+        }
+        setFirebaseStatus('synced');
+        isInitialCloudSyncDone.current = true;
+
+        // Start listening to real-time updates from other tabs / devices
+        unsubscribe = subscribeToPlannerData((latestCloudData) => {
+          if (latestCloudData) {
+            if (Array.isArray(latestCloudData.orders)) setOrders(latestCloudData.orders);
+            if (Array.isArray(latestCloudData.products)) setProducts(latestCloudData.products);
+            if (Array.isArray(latestCloudData.clients)) setClients(latestCloudData.clients);
+            if (Array.isArray(latestCloudData.financials)) setFinancials(latestCloudData.financials);
+            if (Array.isArray(latestCloudData.schedules)) setSchedules(latestCloudData.schedules);
+            setFirebaseStatus('synced');
+          }
+        }, (err) => {
+          console.warn("Firestore subscription notice:", err);
+          setFirebaseStatus('offline');
+        });
+      } catch (err) {
+        console.warn("Firebase initial sync notice:", err);
+        setFirebaseStatus('offline');
+        isInitialCloudSyncDone.current = true;
+      }
+    }
+
+    initFirebaseSync();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, []);
+
+  // 2. Save mutations to Firestore and LocalStorage
+  useEffect(() => {
+    localStorage.setItem('smart_orders_v11', JSON.stringify(orders));
+    localStorage.setItem('smart_products_v11', JSON.stringify(products));
+    localStorage.setItem('smart_clients_v11', JSON.stringify(clients));
+    localStorage.setItem('smart_financials_v11', JSON.stringify(financials));
+    localStorage.setItem('smart_schedules_v11', JSON.stringify(schedules));
+
+    // Only upload to cloud after initial sync has completed
+    if (!isInitialCloudSyncDone.current) return;
+
+    setFirebaseStatus('saving');
+    if (saveCloudTimeoutRef.current) clearTimeout(saveCloudTimeoutRef.current);
+    saveCloudTimeoutRef.current = setTimeout(async () => {
+      const success = await savePlannerDataToFirestore({
+        orders,
+        products,
+        clients,
+        financials,
+        schedules
+      });
+      setFirebaseStatus(success ? 'synced' : 'offline');
+    }, 800);
+
+    return () => {
+      if (saveCloudTimeoutRef.current) clearTimeout(saveCloudTimeoutRef.current);
+    };
+  }, [orders, products, clients, financials, schedules]);
+
   useEffect(() => { localStorage.setItem('smart_layout_v11', JSON.stringify(layoutOrder)); }, [layoutOrder]);
   useEffect(() => { localStorage.setItem('smart_collapsed_orders_v1', JSON.stringify(Array.from(collapsedOrders))); }, [collapsedOrders]);
 
@@ -1649,6 +1736,30 @@ const App: React.FC = () => {
                </div>
              </div>
              <div className="flex items-center gap-1.5 flex-shrink-0">
+               <div 
+                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[10px] font-black border transition-all ${
+                   firebaseStatus === 'synced'
+                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80 shadow-xs'
+                     : firebaseStatus === 'saving'
+                     ? 'bg-amber-50 text-amber-700 border-amber-200/80 shadow-xs'
+                     : 'bg-slate-100 text-slate-500 border-slate-200'
+                 }`}
+                 title={
+                   firebaseStatus === 'synced' 
+                     ? 'Firebase Firestore (smart-loading-planner) 실시간 동기화 완료' 
+                     : firebaseStatus === 'saving'
+                     ? 'Firebase 클라우드에 실시간 저장 중...'
+                     : 'Firebase 오프라인 (로컬 캐시 활성화)'
+                 }
+               >
+                 <Cloud className="w-3.5 h-3.5" />
+                 <span className={`w-1.5 h-1.5 rounded-full ${
+                   firebaseStatus === 'synced' ? 'bg-emerald-500' : firebaseStatus === 'saving' ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'
+                 }`} />
+                 <span className="hidden sm:inline">
+                   {firebaseStatus === 'synced' ? '파이어베이스 연동' : firebaseStatus === 'saving' ? '저장 중...' : '로컬 모드'}
+                 </span>
+               </div>
                <button 
                  onClick={() => {
                    const next = soundService.toggleSound();

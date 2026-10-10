@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "planner_data": {
+      "title": "PlannerData",
+      "description": "Unified storage for smart loading planner application state",
+      "type": "object",
+      "properties": {
+        "orders": {
+          "type": "array",
+          "description": "List of customer orders"
+        },
+        "products": {
+          "type": "array",
+          "description": "List of registered product definitions"
+        },
+        "clients": {
+          "type": "array",
+          "description": "List of registered clients"
+        },
+        "financials": {
+          "type": "array",
+          "description": "Financial and settlement records"
+        },
+        "schedules": {
+          "type": "array",
+          "description": "Calendar events and vehicle schedules"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["orders", "products", "clients", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/planner_data/{docId}": {
+      "schema": "planner_data",
+      "description": "Main application data document for cloud persistence"
+    }
+  }
+}
