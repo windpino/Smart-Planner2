@@ -1,15 +1,9 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Order, OrderItem, ProductDefinition, ClientDefinition, FinancialRecord, ScheduleEvent } from './types';
-import { ChevronLeft, ChevronRight, Plus, Truck, CheckCircle, Trash, GripVertical, Settings, Pencil, Download, Upload, ChevronDown, ChevronUp, Phone, Search, Check, X, Calendar, Volume2, VolumeX, Cloud } from './components/Icons';
+import { ChevronLeft, ChevronRight, Plus, Truck, CheckCircle, Trash, GripVertical, Settings, Pencil, Download, Upload, ChevronDown, ChevronUp, Phone, Search, Check, X, Calendar, Volume2, VolumeX } from './components/Icons';
 import { getSmartLoadingAdvice } from './services/geminiService';
 import { soundService } from './services/soundService';
-import { 
-  savePlannerDataToFirestore, 
-  subscribeToPlannerData,
-  fetchPlannerDataFromFirestore 
-} from './services/firebase';
-import initialBackupData from './data/initial_backup.json';
 
 const HOLIDAYS: Record<string, string> = {
   '01-01': '신정',
@@ -35,7 +29,6 @@ const CLIENT_CATEGORIES = ['마산', '통영', '거제'];
 
 // Helper for Korean Chosung search
 const getChosung = (str: string) => {
-  if (!str || typeof str !== 'string') return '';
   const cho = ["ㄱ","ㄲ","ㄴ","ㄷ","ㄸ","ㄹ","ㅁ","ㅂ","ㅃ","ㅅ","ㅆ","ㅇ","ㅈ","ㅉ","ㅊ","ㅋ","ㅌ","ㅍ","ㅎ"];
   let result = "";
   for (let i = 0; i < str.length; i++) {
@@ -167,72 +160,20 @@ const getCategorySummaryTheme = (category: string) => {
 
 type WidgetType = 'CALENDAR' | 'SCHEDULE_LIST' | 'SUMMARY' | 'ORDER_LIST' | 'DAILY_CLOSING';
 
-const normalizeProducts = (rawProducts: any[]): ProductDefinition[] => {
-  if (!Array.isArray(rawProducts)) return [];
-  return rawProducts.map(p => ({
-    id: String(p.id || Math.random().toString(36).substr(2, 9)),
-    name: String(p.name || ''),
-    shortcut: String(p.shortcut || p.abbreviation || p.name || ''),
-    category: String(p.category || p.categorySmall || p.categoryMedium || '기타'),
-    price: typeof p.price === 'number' ? p.price : (typeof p.salesPrice === 'number' ? p.salesPrice : 0),
-    memo: p.memo ? String(p.memo) : ''
-  })).filter(p => !!p.name);
-};
-
-const normalizeClients = (rawClients: any[]): ClientDefinition[] => {
-  if (!Array.isArray(rawClients)) return [];
-  return rawClients.map(c => ({
-    id: String(c.id || Math.random().toString(36).substr(2, 9)),
-    name: String(c.name || ''),
-    shortcut: c.shortcut ? String(c.shortcut) : '',
-    phone: c.phone ? String(c.phone) : (c.tel ? String(c.tel) : ''),
-    category: c.category ? String(c.category) : '',
-    memo: c.memo ? String(c.memo) : '',
-    sequence: typeof c.sequence === 'number' ? c.sequence : 999
-  })).filter(c => !!c.name);
-};
-
-const normalizeOrders = (rawOrders: any[]): Order[] => {
-  if (!Array.isArray(rawOrders)) return [];
-  return rawOrders.map(o => ({
-    id: String(o.id || Math.random().toString(36).substr(2, 9)),
-    clientName: String(o.clientName || ''),
-    date: String(o.date || ''),
-    items: Array.isArray(o.items) ? o.items.map((i: any) => ({
-      id: String(i.id || Math.random().toString(36).substr(2, 9)),
-      productId: String(i.productId || ''),
-      name: String(i.name || ''),
-      category: String(i.category || '기타'),
-      unitQuantity: typeof i.unitQuantity === 'number' ? i.unitQuantity : 0,
-      isLoaded: !!i.isLoaded,
-      isUnregistered: !!i.isUnregistered
-    })) : [],
-    memo: o.memo ? String(o.memo) : '',
-    createdAt: typeof o.createdAt === 'number' ? o.createdAt : Date.now(),
-    isDelivered: !!o.isDelivered
-  })).filter(o => !!o.clientName);
-};
-
 const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>(() => {
     const saved = localStorage.getItem('smart_orders_v11'); 
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return normalizeOrders(parsed);
-      } catch (e) {}
-    }
-    return normalizeOrders(initialBackupData.orders || []);
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [products, setProducts] = useState<ProductDefinition[]>(() => {
     const saved = localStorage.getItem('smart_products_v11');
-    return saved ? normalizeProducts(JSON.parse(saved)) : []; 
+    return saved ? JSON.parse(saved) : []; 
   });
 
   const [clients, setClients] = useState<ClientDefinition[]>(() => {
     const saved = localStorage.getItem('smart_clients_v11');
-    return saved ? normalizeClients(JSON.parse(saved)) : []; 
+    return saved ? JSON.parse(saved) : []; 
   });
 
   const [financials, setFinancials] = useState<FinancialRecord[]>(() => {
@@ -310,94 +251,12 @@ const App: React.FC = () => {
   const [itemSearchTerm, setItemSearchTerm] = useState('');
   const [showOnlyUnloaded, setShowOnlyUnloaded] = useState(false);
   const [hideDelivered, setHideDelivered] = useState(false);
-  const [firebaseStatus, setFirebaseStatus] = useState<'synced' | 'saving' | 'offline'>('synced');
 
-  // Firebase Real-time Synchronization
-  const isInitialCloudSyncDone = useRef(false);
-  const saveCloudTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // 1. Initial Cloud Sync & Real-time Listener
-  useEffect(() => {
-    let unsubscribe: (() => void) | null = null;
-    async function initFirebaseSync() {
-      try {
-        const cloudData = await fetchPlannerDataFromFirestore();
-        if (cloudData) {
-          if (Array.isArray(cloudData.orders)) setOrders(normalizeOrders(cloudData.orders));
-          if (Array.isArray(cloudData.products)) setProducts(normalizeProducts(cloudData.products));
-          if (Array.isArray(cloudData.clients)) setClients(normalizeClients(cloudData.clients));
-          if (Array.isArray(cloudData.financials)) setFinancials(cloudData.financials);
-          if (Array.isArray(cloudData.schedules)) setSchedules(cloudData.schedules);
-        } else {
-          // Cloud document does not exist yet: seed with initial local data
-          await savePlannerDataToFirestore({
-            orders,
-            products,
-            clients,
-            financials,
-            schedules
-          });
-        }
-        setFirebaseStatus('synced');
-        isInitialCloudSyncDone.current = true;
-
-        // Start listening to real-time updates from other tabs / devices
-        unsubscribe = subscribeToPlannerData((latestCloudData) => {
-          if (latestCloudData) {
-            if (Array.isArray(latestCloudData.orders)) setOrders(normalizeOrders(latestCloudData.orders));
-            if (Array.isArray(latestCloudData.products)) setProducts(normalizeProducts(latestCloudData.products));
-            if (Array.isArray(latestCloudData.clients)) setClients(normalizeClients(latestCloudData.clients));
-            if (Array.isArray(latestCloudData.financials)) setFinancials(latestCloudData.financials);
-            if (Array.isArray(latestCloudData.schedules)) setSchedules(latestCloudData.schedules);
-            setFirebaseStatus('synced');
-          }
-        }, (err) => {
-          console.warn("Firestore subscription notice:", err);
-          setFirebaseStatus('offline');
-        });
-      } catch (err) {
-        console.warn("Firebase initial sync notice:", err);
-        setFirebaseStatus('offline');
-        isInitialCloudSyncDone.current = true;
-      }
-    }
-
-    initFirebaseSync();
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
-  }, []);
-
-  // 2. Save mutations to Firestore and LocalStorage
-  useEffect(() => {
-    localStorage.setItem('smart_orders_v11', JSON.stringify(orders));
-    localStorage.setItem('smart_products_v11', JSON.stringify(products));
-    localStorage.setItem('smart_clients_v11', JSON.stringify(clients));
-    localStorage.setItem('smart_financials_v11', JSON.stringify(financials));
-    localStorage.setItem('smart_schedules_v11', JSON.stringify(schedules));
-
-    // Only upload to cloud after initial sync has completed
-    if (!isInitialCloudSyncDone.current) return;
-
-    setFirebaseStatus('saving');
-    if (saveCloudTimeoutRef.current) clearTimeout(saveCloudTimeoutRef.current);
-    saveCloudTimeoutRef.current = setTimeout(async () => {
-      const success = await savePlannerDataToFirestore({
-        orders,
-        products,
-        clients,
-        financials,
-        schedules
-      });
-      setFirebaseStatus(success ? 'synced' : 'offline');
-    }, 800);
-
-    return () => {
-      if (saveCloudTimeoutRef.current) clearTimeout(saveCloudTimeoutRef.current);
-    };
-  }, [orders, products, clients, financials, schedules]);
-
+  useEffect(() => { localStorage.setItem('smart_orders_v11', JSON.stringify(orders)); }, [orders]);
+  useEffect(() => { localStorage.setItem('smart_products_v11', JSON.stringify(products)); }, [products]);
+  useEffect(() => { localStorage.setItem('smart_clients_v11', JSON.stringify(clients)); }, [clients]);
+  useEffect(() => { localStorage.setItem('smart_financials_v11', JSON.stringify(financials)); }, [financials]);
+  useEffect(() => { localStorage.setItem('smart_schedules_v11', JSON.stringify(schedules)); }, [schedules]);
   useEffect(() => { localStorage.setItem('smart_layout_v11', JSON.stringify(layoutOrder)); }, [layoutOrder]);
   useEffect(() => { localStorage.setItem('smart_collapsed_orders_v1', JSON.stringify(Array.from(collapsedOrders))); }, [collapsedOrders]);
 
@@ -433,7 +292,6 @@ const App: React.FC = () => {
   const handleNextMonth = () => setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
 
   const parseShortcuts = (input: string): OrderItem[] => {
-    if (!input || typeof input !== 'string') return [];
     const parts = input.split(/[\s,]+/).map(p => p.trim()).filter(p => p !== "");
     const parsedItems: OrderItem[] = [];
 
@@ -442,16 +300,13 @@ const App: React.FC = () => {
       if (match) {
         const shortcut = match[1].toUpperCase();
         const unitQty = parseFloat(match[2]) || 0;
-        const product = products.find(p => 
-          (p.shortcut && p.shortcut.toUpperCase() === shortcut) ||
-          (p.name && p.name.toUpperCase() === shortcut)
-        );
+        const product = products.find(p => p.shortcut.toUpperCase() === shortcut);
         if (product) {
           parsedItems.push({
             id: Math.random().toString(36).substr(2, 9),
-            productId: String(product.id),
+            productId: product.id,
             name: product.name,
-            category: product.category || '기타',
+            category: product.category,
             unitQuantity: unitQty,
             isLoaded: false
           });
@@ -472,14 +327,13 @@ const App: React.FC = () => {
   };
 
   const reconstructItemsStr = (items: OrderItem[]) => {
-    if (!Array.isArray(items)) return '';
     return items.map(i => {
-        const p = products.find(prod => String(prod.id) === String(i.productId));
-        let code = p ? (p.shortcut || p.name) : i.name;
-        if (i.isUnregistered && code) {
+        const p = products.find(prod => prod.id === i.productId);
+        let code = p ? p.shortcut : i.name;
+        if (i.isUnregistered) {
             code = code.replace(' (없음)', '');
         }
-        return `${code || ''}${i.unitQuantity}`;
+        return `${code}${i.unitQuantity}`;
     }).join(' ');
   };
 
@@ -489,16 +343,14 @@ const App: React.FC = () => {
     if (items.length === 0) return;
 
     items.sort((a, b) => {
-      const catA = a.category || '기타';
-      const catB = b.category || '기타';
-      const idxA = PRODUCT_CATEGORIES.indexOf(catA);
-      const idxB = PRODUCT_CATEGORIES.indexOf(catB);
+      const idxA = PRODUCT_CATEGORIES.indexOf(a.category);
+      const idxB = PRODUCT_CATEGORIES.indexOf(b.category);
       const categoryOrderA = idxA === -1 ? 999 : idxA;
       const categoryOrderB = idxB === -1 ? 999 : idxB;
       if (categoryOrderA !== categoryOrderB) {
         return categoryOrderA - categoryOrderB;
       }
-      return (a.name || '').localeCompare(b.name || '');
+      return a.name.localeCompare(b.name);
     });
 
     if (editingOrder) {
@@ -842,41 +694,6 @@ const App: React.FC = () => {
     if (data.schedules) setSchedules(data.schedules);
     setShowDataManager(false);
     alert(message || '데이터가 성공적으로 복원되었습니다.');
-  };
-
-  const handleUploadAllToFirebase = async (): Promise<boolean> => {
-    soundService.playButtonClick();
-    setFirebaseStatus('saving');
-    const success = await savePlannerDataToFirestore({
-      orders,
-      products,
-      clients,
-      financials,
-      schedules
-    });
-    if (success) {
-      soundService.playSuccessSound();
-      setFirebaseStatus('synced');
-    } else {
-      setFirebaseStatus('offline');
-    }
-    return success;
-  };
-
-  const handleDownloadAllFromFirebase = async (): Promise<boolean> => {
-    soundService.playButtonClick();
-    const cloudData = await fetchPlannerDataFromFirestore();
-    if (cloudData) {
-      if (Array.isArray(cloudData.orders)) setOrders(cloudData.orders);
-      if (Array.isArray(cloudData.products)) setProducts(cloudData.products);
-      if (Array.isArray(cloudData.clients)) setClients(cloudData.clients);
-      if (Array.isArray(cloudData.financials)) setFinancials(cloudData.financials);
-      if (Array.isArray(cloudData.schedules)) setSchedules(cloudData.schedules);
-      soundService.playSuccessSound();
-      setFirebaseStatus('synced');
-      return true;
-    }
-    return false;
   };
 
   const handleSelectClientForOrder = (clientName: string) => {
@@ -1932,19 +1749,7 @@ const App: React.FC = () => {
 
       {showProductManager && <ProductManagerModal products={products} setProducts={setProducts} onClose={() => setShowProductManager(false)} onSelectForOrder={handleSelectProductForOrder} />}
       {showClientManager && <ClientManagerModal clients={clients} setClients={setClients} onClose={() => setShowClientManager(false)} onSelectForOrder={handleSelectClientForOrder} />}
-      {showDataManager && (
-        <DataManagerModal 
-          orders={orders} 
-          products={products} 
-          clients={clients} 
-          financials={financials} 
-          schedules={schedules}
-          onUploadToFirebase={handleUploadAllToFirebase}
-          onDownloadFromFirebase={handleDownloadAllFromFirebase}
-          onImport={handleImportData} 
-          onClose={() => setShowDataManager(false)} 
-        />
-      )}
+      {showDataManager && <DataManagerModal orders={orders} products={products} clients={clients} financials={financials} onImport={handleImportData} onClose={() => setShowDataManager(false)} />}
       {showOrderForm && (
         <OrderModal 
           onClose={handleCloseOrderForm} 
@@ -2281,69 +2086,11 @@ const ClosingManagerModal: React.FC<{ financials: FinancialRecord[], onClose: ()
     );
 };
 
-const DataManagerModal: React.FC<{ 
-  orders: Order[]; 
-  products: ProductDefinition[]; 
-  clients: ClientDefinition[]; 
-  financials: FinancialRecord[]; 
-  schedules?: ScheduleEvent[];
-  onUploadToFirebase?: () => Promise<boolean>;
-  onDownloadFromFirebase?: () => Promise<boolean>;
-  onImport: (data: any, msg?: string) => void; 
-  onClose: () => void;
-}> = ({ 
-  orders, 
-  products, 
-  clients, 
-  financials, 
-  schedules = [], 
-  onUploadToFirebase, 
-  onDownloadFromFirebase, 
-  onImport, 
-  onClose 
-}) => {
+const DataManagerModal: React.FC<{ orders: Order[], products: ProductDefinition[], clients: ClientDefinition[], financials: FinancialRecord[], onImport: (data: any, msg?: string) => void, onClose: () => void }> = ({ orders, products, clients, financials, onImport, onClose }) => {
   const jsonInputRef = useRef<HTMLInputElement>(null);
-  const [cloudMsg, setCloudMsg] = useState<string | null>(null);
-  const [isCloudLoading, setIsCloudLoading] = useState(false);
   
   const [googleSheetUrl, setGoogleSheetUrl] = useState(() => localStorage.getItem('google_sheet_url_v1') || '');
   const [isSyncing, setIsSyncing] = useState(false);
-
-  const handleUploadClick = async () => {
-    if (!onUploadToFirebase) return;
-    setIsCloudLoading(true);
-    setCloudMsg(null);
-    try {
-      const ok = await onUploadToFirebase();
-      if (ok) {
-        setCloudMsg('✅ 현재 데이터가 파이어베이스에 성공적으로 저장되었습니다!');
-      } else {
-        setCloudMsg('⚠️ 파이어베이스 저장 실패 (네트워크 또는 보안 규칙을 확인하세요).');
-      }
-    } catch (e) {
-      setCloudMsg('⚠️ 파이어베이스 저장 중 오류가 발생했습니다.');
-    } finally {
-      setIsCloudLoading(false);
-    }
-  };
-
-  const handleDownloadClick = async () => {
-    if (!onDownloadFromFirebase) return;
-    setIsCloudLoading(true);
-    setCloudMsg(null);
-    try {
-      const ok = await onDownloadFromFirebase();
-      if (ok) {
-        setCloudMsg('✅ 파이어베이스에서 최신 데이터를 성공적으로 가져왔습니다!');
-      } else {
-        setCloudMsg('⚠️ 파이어베이스에 저장된 데이터가 없거나 불러오지 못했습니다.');
-      }
-    } catch (e) {
-      setCloudMsg('⚠️ 파이어베이스 불러오기 중 오류가 발생했습니다.');
-    } finally {
-      setIsCloudLoading(false);
-    }
-  };
 
   useEffect(() => {
     localStorage.setItem('google_sheet_url_v1', googleSheetUrl);
@@ -2526,50 +2273,6 @@ const DataManagerModal: React.FC<{
           <h3 className="text-xl font-black text-slate-800">데이터 관리</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-2xl">&times;</button>
         </div>
-
-        {/* Firebase Cloud Sync Card */}
-        <div className="bg-gradient-to-br from-blue-50 to-indigo-50/60 p-4 rounded-2xl border border-blue-200/80 space-y-2.5">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Cloud className="w-5 h-5 text-blue-600" />
-              <h4 className="text-sm font-black text-slate-800">파이어베이스 클라우드</h4>
-            </div>
-            <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
-              smart-loading-planner
-            </span>
-          </div>
-
-          <p className="text-[11px] font-bold text-slate-500 leading-snug">
-            현재 기기 데이터: <span className="text-blue-600 font-extrabold">주문 {orders.length}건</span> · <span className="text-blue-600 font-extrabold">품목 {products.length}개</span> · <span className="text-blue-600 font-extrabold">거래처 {clients.length}곳</span>
-          </p>
-
-          <div className="grid grid-cols-2 gap-2 pt-0.5">
-            <button
-              type="button"
-              onClick={handleUploadClick}
-              disabled={isCloudLoading}
-              className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-2.5 px-3 rounded-xl transition-all shadow-xs text-xs active:scale-95 disabled:opacity-60"
-            >
-              <Upload className="w-4 h-4" />
-              <span>{isCloudLoading ? '전송 중...' : '클라우드로 올리기'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadClick}
-              disabled={isCloudLoading}
-              className="flex items-center justify-center gap-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-extrabold py-2.5 px-3 rounded-xl transition-all shadow-xs text-xs active:scale-95 disabled:opacity-60"
-            >
-              <Download className="w-4 h-4" />
-              <span>{isCloudLoading ? '가져오는 중...' : '클라우드에서 받기'}</span>
-            </button>
-          </div>
-
-          {cloudMsg && (
-            <p className="text-[11px] font-extrabold text-blue-700 bg-white/90 p-2 rounded-xl border border-blue-200 text-center animate-in fade-in">
-              {cloudMsg}
-            </p>
-          )}
-        </div>
         
         <div className="space-y-3">
             <h4 className="text-sm font-bold text-slate-500">데이터 백업 (내보내기)</h4>
@@ -2717,9 +2420,9 @@ const ProductManagerModal: React.FC<{ products: ProductDefinition[], setProducts
     const term = searchTerm.trim().toLowerCase();
     if (!term) return matchesCategory;
     const matchesSearch = 
-      (p.name && p.name.toLowerCase().includes(term)) || 
+      p.name.toLowerCase().includes(term) || 
       (p.shortcut && p.shortcut.toLowerCase().includes(term)) ||
-      (p.name && getChosung(p.name).toLowerCase().includes(term));
+      getChosung(p.name).toLowerCase().includes(term);
     return matchesCategory && matchesSearch;
   });
 
@@ -2937,7 +2640,7 @@ const ClientManagerModal: React.FC<{ clients: ClientDefinition[], setClients: Re
 
   const filtered = clients.filter(c => {
     const matchesCategory = filterCategory === '전체' || c.category === filterCategory;
-    const matchesSearch = (c.name && c.name.includes(searchTerm)) || (c.shortcut && c.shortcut.includes(searchTerm));
+    const matchesSearch = c.name.includes(searchTerm) || (c.shortcut && c.shortcut.includes(searchTerm));
     return matchesCategory && matchesSearch;
   }).sort((a, b) => {
     const seqA = a.sequence ?? 999;
@@ -3113,16 +2816,9 @@ const OrderModal: React.FC<{
   }, [initialClientName, initialItemsStr]);
 
   const filteredClients = useMemo(() => {
-    if (!clientName || typeof clientName !== 'string') return [];
-    const term = clientName.toLowerCase();
+    if (!clientName) return [];
     return clients
-      .filter(c => {
-        if (!c || !c.name) return false;
-        const nameMatch = c.name.toLowerCase().includes(term);
-        const shortcutMatch = c.shortcut ? c.shortcut.toLowerCase().includes(term) : false;
-        const chosungMatch = getChosung(c.name).includes(term);
-        return nameMatch || shortcutMatch || chosungMatch;
-      })
+      .filter(c => c.name.includes(clientName) || (c.shortcut && c.shortcut.includes(clientName)) || getChosung(c.name).includes(clientName))
       .sort((a, b) => {
         const seqA = a.sequence ?? 999;
         const seqB = b.sequence ?? 999;
@@ -3133,16 +2829,9 @@ const OrderModal: React.FC<{
   }, [clients, clientName]);
 
   const filteredProducts = useMemo(() => {
-    if (!activeSearchTerm || typeof activeSearchTerm !== 'string' || activeSearchTerm.length < 1) return [];
+    if (!activeSearchTerm || activeSearchTerm.length < 1) return [];
     if (/^\d+$/.test(activeSearchTerm)) return []; // Stop searching if it's just numbers
-    const term = activeSearchTerm.toLowerCase();
-    return products.filter(p => {
-      if (!p || !p.name) return false;
-      const nameMatch = p.name.toLowerCase().includes(term);
-      const shortcutMatch = p.shortcut ? p.shortcut.toLowerCase().includes(term) : false;
-      const chosungMatch = getChosung(p.name).includes(term);
-      return nameMatch || shortcutMatch || chosungMatch;
-    }).slice(0, 5);
+    return products.filter(p => p.name.includes(activeSearchTerm) || p.shortcut.includes(activeSearchTerm) || getChosung(p.name).includes(activeSearchTerm)).slice(0, 5);
   }, [products, activeSearchTerm]);
 
   const handleItemsChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -3179,15 +2868,14 @@ const OrderModal: React.FC<{
     const suffix = val.substring(end);
     
     // Insert shortcut. Do NOT add extra space, user might type quantity directly (e.g. "Krill" -> "Krill5")
-    const insertCode = product.shortcut || product.name || '';
-    const newText = prefix + insertCode + suffix;
+    const newText = prefix + product.shortcut + suffix;
     
     setItemsStr(newText);
     setActiveSearchTerm(''); // Close suggestions
     
     setTimeout(() => {
         textarea.focus();
-        const newPos = start + insertCode.length;
+        const newPos = start + product.shortcut.length;
         textarea.setSelectionRange(newPos, newPos);
     }, 0);
   };
@@ -3208,7 +2896,7 @@ const OrderModal: React.FC<{
                     <input type="text" value={clientName} onChange={e => { setClientName(e.target.value); setShowClientSuggestions(true); }} placeholder="거래처명" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold" />
                     {showClientSuggestions && clientName && filteredClients.length > 0 && (
                         <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-40 overflow-y-auto">
-                            {filteredClients.map(c => <div key={String(c.id)} onClick={() => { setClientName(c.name); setShowClientSuggestions(false); }} className="px-4 py-2 hover:bg-blue-50 cursor-pointer text-sm font-bold">{c.name}</div>)}
+                            {filteredClients.map(c => <div key={c.id} onClick={() => { setClientName(c.name); setShowClientSuggestions(false); }} className="px-4 py-2 hover:bg-blue-50 cursor-pointer text-sm font-bold">{c.name}</div>)}
                         </div>
                     )}
                 </div>
@@ -3219,8 +2907,8 @@ const OrderModal: React.FC<{
                 {filteredProducts.length > 0 && (
                      <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg z-20 max-h-40 overflow-y-auto">
                         {filteredProducts.map(p => (
-                             <div key={String(p.id)} onClick={() => selectProduct(p)} className="px-4 py-2 hover:bg-blue-50 cursor-pointer text-sm font-bold flex justify-between border-b border-slate-50 last:border-0">
-                                 <span>{p.name}</span><span className="text-blue-500 font-bold">{p.shortcut || ''}</span>
+                             <div key={p.id} onClick={() => selectProduct(p)} className="px-4 py-2 hover:bg-blue-50 cursor-pointer text-sm font-bold flex justify-between border-b border-slate-50 last:border-0">
+                                 <span>{p.name}</span><span className="text-blue-500">{p.shortcut}</span>
                              </div>
                         ))}
                      </div>
