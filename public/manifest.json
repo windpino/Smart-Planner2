@@ -1,0 +1,17 @@
+{
+  "short_name": "링커X",
+  "name": "스마트 상차 플래너 Linker X",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#2563eb",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/color/512/truck.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

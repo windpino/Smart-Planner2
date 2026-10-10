@@ -1,0 +1,79 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스마트 상차 플래너</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontSize: {
+              'xs': ['16px', { lineHeight: '1.5' }],
+              'sm': ['16px', { lineHeight: '1.5' }],
+              'base': ['16px', { lineHeight: '1.5' }],
+              'lg': ['16px', { lineHeight: '1.5' }],
+              'xl': ['16px', { lineHeight: '1.5' }],
+              '2xl': ['16px', { lineHeight: '1.5' }],
+              '3xl': ['16px', { lineHeight: '1.5' }],
+              '4xl': ['16px', { lineHeight: '1.5' }],
+              '5xl': ['16px', { lineHeight: '1.5' }],
+            }
+          }
+        }
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-size: 15px !important;
+        }
+        .calendar-container * {
+            font-size: 12px !important;
+        }
+        body {
+            font-family: 'Inter', 'Noto Sans KR', sans-serif;
+            background-color: #f8fafc;
+        }
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/"
+  }
+}
+</script>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#2563eb">
+<link rel="shortcut icon" href="/favicon.ico">
+<link rel="stylesheet" href="/index.css">
+</head>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js');
+  }
+</script>
+<body>
+    <div id="root"></div>
+
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>
